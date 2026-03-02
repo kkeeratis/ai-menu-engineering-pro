@@ -38,8 +38,13 @@ def apply_custom_css():
 def calculate_menu_engineering(df: pd.DataFrame) -> tuple[pd.DataFrame, float, float]:
     df['Profit Margin (THB)'] = df['Price'] - df['Cost']
     df['Total Profit'] = df['Profit Margin (THB)'] * df['Sold Qty']
+    
+    # ปรับสมการให้เสถียรขึ้น ป้องกัน ValueError เมื่อตารางว่างหรือค่าเป็น 0
     total_items_sold = df['Sold Qty'].sum()
-    df['Mix %'] = np.where(total_items_sold > 0, (df['Sold Qty'] / total_items_sold) * 100, 0)
+    if total_items_sold > 0:
+        df['Mix %'] = (df['Sold Qty'] / total_items_sold) * 100
+    else:
+        df['Mix %'] = 0.0
     
     avg_margin = df['Total Profit'].sum() / total_items_sold if total_items_sold > 0 else 0
     avg_mix = (1 / len(df)) * 100 * 0.7 if len(df) > 0 else 0
@@ -230,9 +235,11 @@ def main():
             
             st.altair_chart(rfm_chart.interactive(), use_container_width=True)
             
-            # สรุปจำนวนลูกค้า
+            # สรุปจำนวนลูกค้า (แก้บั๊ก DataFrame Duplicate Columns เรียบร้อย)
             st.markdown("##### 📌 สรุปจำนวนลูกค้าแต่ละกลุ่ม")
-            st.dataframe(rfm_df['Segment'].value_counts().reset_index().rename(columns={'index': 'Segment', 'Segment': 'จำนวนคน', 'count': 'จำนวนคน'}), hide_index=True)
+            summary_df = rfm_df['Segment'].value_counts().reset_index()
+            summary_df.columns = ['Segment', 'จำนวนคน']
+            st.dataframe(summary_df, hide_index=True)
 
     # ---------------- TAB 3: AI HOLISTIC ----------------
     with tab3:
