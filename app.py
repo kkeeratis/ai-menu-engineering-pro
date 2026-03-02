@@ -9,7 +9,7 @@ import time
 # 1. CONFIG & STYLING
 # ==============================
 st.set_page_config(
-    page_title="AI Menu Engineering Pro",
+    page_title="AI Restaurant Strategy Pro (Menu + RFM)",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -32,24 +32,18 @@ def apply_custom_css():
     """, unsafe_allow_html=True)
 
 # ==============================
-# 2. CORE BUSINESS LOGIC (Optimized)
+# 2. CORE LOGIC: MENU ENGINEERING
 # ==============================
 @st.cache_data(show_spinner=False)
 def calculate_menu_engineering(df: pd.DataFrame) -> tuple[pd.DataFrame, float, float]:
-    """คำนวณ Menu Engineering ด้วย NumPy Vectorization (ประสิทธิภาพสูง)"""
-    # 1. คำนวณกำไร และ กำไรรวม
     df['Profit Margin (THB)'] = df['Price'] - df['Cost']
     df['Total Profit'] = df['Profit Margin (THB)'] * df['Sold Qty']
-    
-    # 2. คำนวณสัดส่วนยอดขาย
     total_items_sold = df['Sold Qty'].sum()
     df['Mix %'] = np.where(total_items_sold > 0, (df['Sold Qty'] / total_items_sold) * 100, 0)
     
-    # 3. คำนวณค่าเฉลี่ย (Benchmarks)
     avg_margin = df['Total Profit'].sum() / total_items_sold if total_items_sold > 0 else 0
     avg_mix = (1 / len(df)) * 100 * 0.7 if len(df) > 0 else 0
     
-    # 4. จัดกลุ่มเมนู (Vectorized Conditions - เร็วกว่า df.apply หลายเท่า)
     conditions = [
         (df['Profit Margin (THB)'] >= avg_margin) & (df['Mix %'] >= avg_mix),
         (df['Profit Margin (THB)'] < avg_margin) & (df['Mix %'] >= avg_mix),
@@ -57,34 +51,76 @@ def calculate_menu_engineering(df: pd.DataFrame) -> tuple[pd.DataFrame, float, f
         (df['Profit Margin (THB)'] < avg_margin) & (df['Mix %'] < avg_mix)
     ]
     choices = ['🌟 Star (ดาวเด่น)', '🐴 Plowhorse (ม้างาน)', '🧩 Puzzle (ปริศนา)', '🐶 Dog (หมาน้อย)']
-    
     df['Category'] = np.select(conditions, choices, default='Unknown')
-    
     return df, avg_margin, avg_mix
 
-def generate_ai_strategy(api_key: str, df: pd.DataFrame) -> str:
-    """เรียกใช้ Gemini AI เพื่อวางแผนกลยุทธ์จาก Dataframe"""
-    if not api_key:
-        return "⚠️ กรุณาใส่ Gemini API Key ที่แถบด้านข้างก่อนครับ"
+# ==============================
+# 3. CORE LOGIC: RFM ANALYSIS
+# ==============================
+@st.cache_data(show_spinner=False)
+def calculate_rfm(df: pd.DataFrame) -> pd.DataFrame:
+    """คำนวณและจัดกลุ่มลูกค้าตามหลักการ RFM"""
+    # กำหนดเกณฑ์คะแนน (1-5) อย่างง่ายสำหรับ Demo
+    df['R_Score'] = np.select(
+        [df['Recency (Days)'] <= 7, df['Recency (Days)'] <= 15, df['Recency (Days)'] <= 30, df['Recency (Days)'] <= 60], 
+        [5, 4, 3, 2], default=1
+    )
+    df['F_Score'] = np.select(
+        [df['Frequency (Visits)'] >= 10, df['Frequency (Visits)'] >= 7, df['Frequency (Visits)'] >= 4, df['Frequency (Visits)'] >= 2], 
+        [5, 4, 3, 2], default=1
+    )
+    
+    # จัดกลุ่ม Segments
+    conditions = [
+        (df['R_Score'] >= 4) & (df['F_Score'] >= 4), # มาบ่อย มาล่าสุด
+        (df['R_Score'] >= 3) & (df['F_Score'] >= 3), # ขาประจำ
+        (df['R_Score'] <= 2) & (df['F_Score'] >= 3), # เคยมาบ่อย แต่หายไปนาน
+        (df['R_Score'] >= 4) & (df['F_Score'] <= 2), # เพิ่งมาครั้งแรกๆ
+        (df['R_Score'] <= 2) & (df['F_Score'] <= 2)  # ขาจรที่หายไปนาน
+    ]
+    choices = ['👑 Champions', '🤝 Loyal Customers', '⚠️ At Risk (กำลังจะหายไป)', '👋 New/Promising', '💤 Hibernating']
+    df['Segment'] = np.select(conditions, choices, default='Others')
+    return df
+
+# ==============================
+# 4. AI HOLISTIC STRATEGY (MENU + RFM)
+# ==============================
+def generate_holistic_strategy(api_key: str, menu_df: pd.DataFrame, rfm_df: pd.DataFrame) -> str:
+    """ส่งข้อมูลทั้ง 2 ด้านให้ AI คิดกลยุทธ์เชื่อมโยง (Cross-Analysis)"""
+    if not api_key: return "⚠️ กรุณาใส่ Gemini API Key ที่แถบด้านข้างก่อนครับ"
         
     try:
         genai.configure(api_key=api_key)
-        # ใช้ 2.5-flash เป็นโมเดลหลัก
         model = genai.GenerativeModel("gemini-2.5-flash")
         
-        # จัดกลุ่มข้อมูลส่งให้ AI
-        grouped = df.groupby('Category')['Menu Item'].apply(list).to_dict()
+        # สรุปฝั่งเมนู
+        menu_grouped = menu_df.groupby('Category')['Menu Item'].apply(list).to_dict()
+        
+        # สรุปฝั่งลูกค้า
+        rfm_summary = rfm_df['Segment'].value_counts().to_dict()
+        total_customers = len(rfm_df)
         
         prompt = f"""
-        ในฐานะ F&B Consultant ระดับองค์กร นี่คือโครงสร้างเมนู (Menu Engineering) ของร้านอาหาร:
+        คุณคือ 'Chief Strategy Officer (CSO)' ระดับองค์กรธุรกิจ F&B 
+        เรามีข้อมูล Data Analytics 2 แกนหลักของร้านอาหาร ดังนี้:
         
-        - 🌟 ดาวเด่น (กำไรสูง ขายดี): {', '.join(grouped.get('🌟 Star (ดาวเด่น)', ['ไม่มี']))}
-        - 🐴 ม้างาน (กำไรต่ำ ขายดี): {', '.join(grouped.get('🐴 Plowhorse (ม้างาน)', ['ไม่มี']))}
-        - 🧩 ปริศนา (กำไรสูง ขายไม่ดี): {', '.join(grouped.get('🧩 Puzzle (ปริศนา)', ['ไม่มี']))}
-        - 🐶 หมาน้อย (กำไรต่ำ ขายไม่ดี): {', '.join(grouped.get('🐶 Dog (หมาน้อย)', ['ไม่มี']))}
+        📊 1. Product Analytics (Menu Engineering BCG Matrix):
+        - 🌟 ดาวเด่น (กำไรสูง ขายดี): {', '.join(menu_grouped.get('🌟 Star (ดาวเด่น)', ['ไม่มี']))}
+        - 🐴 ม้างาน (กำไรต่ำ ขายดี): {', '.join(menu_grouped.get('🐴 Plowhorse (ม้างาน)', ['ไม่มี']))}
+        - 🧩 ปริศนา (กำไรสูง ขายไม่ดี): {', '.join(menu_grouped.get('🧩 Puzzle (ปริศนา)', ['ไม่มี']))}
+        - 🐶 หมาน้อย (กำไรต่ำ ขายไม่ดี): {', '.join(menu_grouped.get('🐶 Dog (หมาน้อย)', ['ไม่มี']))}
         
-        กรุณาวิเคราะห์และแนะนำ Actionable Strategy สำหรับเมนูแต่ละกลุ่มเพื่อเพิ่ม 'กำไรรวม' 
-        ตอบเป็นภาษาไทย รูปแบบมืออาชีพสำหรับผู้บริหาร ห้ามใช้แท็ก HTML
+        👥 2. Customer Analytics (RFM Segmentation จาก {total_customers} ตัวอย่างลูกค้า):
+        - 👑 Champions (ลูกค้ารักเราสุดๆ): {rfm_summary.get('👑 Champions', 0)} คน
+        - ⚠️ At Risk (ลูกค้าประจำที่เริ่มหายไป): {rfm_summary.get('⚠️ At Risk (กำลังจะหายไป)', 0)} คน
+        - 👋 New/Promising (ลูกค้าหน้าใหม่): {rfm_summary.get('👋 New/Promising', 0)} คน
+        
+        📌 คำสั่ง: 
+        ให้ออกแบบกลยุทธ์ "การตลาดและการขาย (Sales & Marketing Tactics)" แบบเจาะลึก 3 ข้อ 
+        โดยให้ "จับคู่กลุ่มเมนู (Product)" เข้ากับ "กลุ่มลูกค้า (Customer Segment)" เพื่อแก้ปัญหาหรือเพิ่มยอดขาย 
+        ตัวอย่างเช่น: "ดึงลูกค้า At Risk กลับมาด้วยโปรโมชันเมนู Plowhorse" หรือ "ทำ Upsell เมนู Puzzle ให้กลุ่ม Champions"
+        
+        ตอบเป็นภาษาไทย รูปแบบมืออาชีพสำหรับพรีเซนต์ผู้บริหาร (Actionable Insights) ห้ามใช้แท็ก HTML
         """
         response = model.generate_content(prompt)
         return f"*(Powered by: `gemini-2.5-flash`)*\n\n" + response.text
@@ -92,22 +128,19 @@ def generate_ai_strategy(api_key: str, df: pd.DataFrame) -> str:
         return f"❌ AI Error: ระบบเชื่อมต่อขัดข้อง ({str(e)})"
 
 # ==============================
-# 3. UI RENDERING FUNCTIONS
+# 5. UI RENDERING FUNCTIONS
 # ==============================
 def render_sidebar() -> str:
     with st.sidebar:
-        st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🍽️</h1>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; font-size: 3rem; margin-bottom: 0;'>🧠</h1>", unsafe_allow_html=True)
         st.header("⚙️ ตั้งค่าระบบ (Settings)")
         api_key = st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else st.text_input("Gemini API Key:", type="password")
         st.caption("รับ Key ฟรีได้ที่ Google AI Studio")
         st.divider()
-        st.markdown("""
-        **โครงสร้าง 4 กลุ่มเมนู:**
-        - 🌟 **Stars:** กำไรสูง ขายน้อย (โปรโมทเพิ่ม)
-        - 🐴 **Plowhorses:** กำไรน้อย ขายดี (ขึ้นราคาเนียนๆ/ลดต้นทุน)
-        - 🧩 **Puzzles:** กำไรสูง ขายไม่ดี (ปรับหน้าตา/ทำโปร)
-        - 🐶 **Dogs:** กำไรน้อย ขายไม่ดี (พิจารณาตัดทิ้ง)
-        """)
+        st.markdown("### 📊 Module 1: Menu Engineering")
+        st.caption("วิเคราะห์ความคุ้มค่าของเมนู (Product-Centric)")
+        st.markdown("### 👥 Module 2: RFM Analysis")
+        st.caption("วิเคราะห์พฤติกรรมลูกค้า (Customer-Centric)")
         return api_key
 
 def init_mock_data():
@@ -118,106 +151,103 @@ def init_mock_data():
             'Price': [60, 75, 95, 80, 120, 110, 85, 15],
             'Sold Qty': [500, 450, 150, 300, 80, 120, 100, 200]
         })
-
-def render_dashboard(df: pd.DataFrame, avg_margin: float, avg_mix: float):
-    st.divider()
-    st.subheader("2. 🎯 ผลการวิเคราะห์ BCG Matrix (Menu Categorization)")
-    
-    # --- Metrics ---
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("ยอดขายรวม (Total Items)", f"{df['Sold Qty'].sum():,} ชิ้น")
-    m2.metric("กำไรรวม (Total Profit)", f"฿ {df['Total Profit'].sum():,.2f}")
-    m3.metric("ค่าเฉลี่ยกำไรต่อจาน", f"฿ {avg_margin:.2f}")
-    m4.metric("เกณฑ์ความนิยมเฉลี่ย", f"{avg_mix:.2f} %")
-    
-    st.write("")
-    c1, c2 = st.columns([1.6, 1])
-    
-    with c1:
-        # --- Optimized Altair Chart (Added Text Labels) ---
-        base_chart = alt.Chart(df).encode(
-            x=alt.X('Mix %:Q', title='ความนิยม (Popularity / Mix %)', scale=alt.Scale(zero=False)),
-            y=alt.Y('Profit Margin (THB):Q', title='กำไรต่อจาน (Profitability)', scale=alt.Scale(zero=False))
-        )
-        
-        # จุด Scatter Plot
-        points = base_chart.mark_circle(size=200, opacity=0.8).encode(
-            color=alt.Color('Category:N', scale=alt.Scale(
-                domain=['🌟 Star (ดาวเด่น)', '🐴 Plowhorse (ม้างาน)', '🧩 Puzzle (ปริศนา)', '🐶 Dog (หมาน้อย)'],
-                range=['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
-            ), legend=alt.Legend(title="กลุ่มเมนู", orient='bottom')),
-            tooltip=['Menu Item', 'Profit Margin (THB)', 'Mix %', 'Sold Qty', 'Category']
-        )
-        
-        # ใส่ชื่อเมนูข้างๆ จุด (ทำให้ดูง่ายขึ้นมากเวลาพรีเซนต์)
-        text_labels = base_chart.mark_text(
-            align='left', baseline='middle', dx=10, fontSize=11, fontWeight='bold', color='#333333'
-        ).encode(text='Menu Item:N')
-        
-        # เส้นตัดแกนค่าเฉลี่ย
-        x_rule = alt.Chart(pd.DataFrame({'x': [avg_mix]})).mark_rule(color='#475569', strokeDash=[5,5]).encode(x='x:Q')
-        y_rule = alt.Chart(pd.DataFrame({'y': [avg_margin]})).mark_rule(color='#475569', strokeDash=[5,5]).encode(y='y:Q')
-        
-        st.altair_chart((points + text_labels + x_rule + y_rule).interactive(), use_container_width=True)
-
-    with c2:
-        st.markdown("##### 📌 สรุปเมนูตามกลุ่ม")
-        display_df = df[['Menu Item', 'Profit Margin (THB)', 'Mix %', 'Category']].sort_values(by='Profit Margin (THB)', ascending=False)
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    if 'rfm_data' not in st.session_state:
+        # Mock ข้อมูลลูกค้า 15 คน
+        st.session_state.rfm_data = pd.DataFrame({
+            'Customer ID': [f"C{str(i).zfill(3)}" for i in range(1, 16)],
+            'Recency (Days)': [2, 15, 45, 2, 5, 60, 10, 30, 90, 4, 1, 35, 8, 12, 50],
+            'Frequency (Visits)': [12, 5, 2, 15, 8, 1, 6, 3, 1, 10, 20, 4, 3, 7, 2],
+            'Monetary (THB)': [4500, 1200, 300, 6000, 2500, 150, 1800, 900, 200, 3800, 8000, 1500, 750, 2100, 400]
+        })
 
 # ==============================
-# 4. MAIN APP EXECUTION
+# 6. MAIN APP EXECUTION
 # ==============================
 def main():
     apply_custom_css()
     
-    st.markdown("<h1 style='text-align: center;'>📊 AI Menu Engineering & Profit Optimizer</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #64748b;'>ระบบวิเคราะห์และเพิ่มผลกำไรโครงสร้างเมนูร้านอาหารระดับองค์กร</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🧠 AI Restaurant Strategy Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #64748b;'>Holistic Analytics: <b>Product (Menu Engineering)</b> x <b>Customer (RFM)</b></p>", unsafe_allow_html=True)
     st.divider()
 
     api_key_input = render_sidebar()
     init_mock_data()
 
-    # --- Section 1: Data Input ---
-    st.subheader("1. 📝 ป้อนข้อมูลเมนูอาหาร (Data Input)")
-    st.caption("ทดลองแก้ไขตัวเลขในตารางด้านล่าง ระบบจะคำนวณกำไรและสัดส่วนให้แบบ Real-time")
+    # ใช้ Tabs ในการจัดระเบียบหน้าจอ
+    tab1, tab2, tab3 = st.tabs(["🍽️ 1. Menu Engineering (เมนู)", "👥 2. RFM Analysis (ลูกค้า)", "🚀 3. AI Holistic Strategy (เชื่อมโยงกลยุทธ์)"])
 
-    edited_df = st.data_editor(
-        st.session_state.menu_data, 
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "Menu Item": st.column_config.TextColumn("ชื่อเมนู (Menu Item)", required=True),
-            "Cost": st.column_config.NumberColumn("ต้นทุน (Cost)", min_value=0, format="%d ฿"),
-            "Price": st.column_config.NumberColumn("ราคาขาย (Price)", min_value=0, format="%d ฿"),
-            "Sold Qty": st.column_config.NumberColumn("ยอดขายต่อเดือน (Qty)", min_value=0)
-        }
-    )
-
-    if st.button("📈 1. วิเคราะห์โครงสร้างเมนู (Analyze Matrix)"):
-        with st.spinner("กำลังคำนวณตัวเลขทางบัญชีและจัดกลุ่ม BCG Matrix..."):
-            result_df, avg_margin, avg_mix = calculate_menu_engineering(edited_df.copy())
-            st.session_state['analyzed_df'] = result_df
-            st.session_state['avg_margin'] = avg_margin
-            st.session_state['avg_mix'] = avg_mix
-            time.sleep(0.3)
-
-    # --- Section 2: Dashboard ---
-    if 'analyzed_df' in st.session_state:
-        df = st.session_state['analyzed_df']
-        render_dashboard(df, st.session_state['avg_margin'], st.session_state['avg_mix'])
-            
-        # --- Section 3: AI Strategy ---
-        st.divider()
-        st.subheader("3. 🧠 ที่ปรึกษากลยุทธ์ AI (AI Strategy Consultant)")
-        st.caption("ส่งข้อมูลเมนูที่ถูกจัดกลุ่มเสร็จแล้วให้ AI วางแผนการตลาดและปรับปรุงต้นทุนเพื่อเพิ่มกำไรสูงสุด")
+    # ---------------- TAB 1: MENU ----------------
+    with tab1:
+        st.subheader("วิเคราะห์โครงสร้างเมนูและกำไร (Product Centric)")
+        edited_menu_df = st.data_editor(st.session_state.menu_data, num_rows="dynamic", use_container_width=True)
         
-        if st.button("✨ 2. สร้างแผนกลยุทธ์ระดับผู้บริหาร (Generate AI Strategy)"):
-            with st.spinner("AI กำลังวิเคราะห์และเรียบเรียงกลยุทธ์..."):
-                strategy_text = generate_ai_strategy(api_key_input, df)
-                st.markdown(f'<div class="strategy-card">{strategy_text}</div>', unsafe_allow_html=True)
+        if st.button("📈 คำนวณ BCG Matrix", key="btn_menu"):
+            with st.spinner("กำลังประมวลผล..."):
+                result_df, avg_margin, avg_mix = calculate_menu_engineering(edited_menu_df.copy())
+                st.session_state['analyzed_menu'] = result_df
                 
-    st.markdown("<br><hr><center><small>Built with Streamlit, Pandas, Altair & Gemini AI | Optimized Professional Portfolio</small></center>", unsafe_allow_html=True)
+        if 'analyzed_menu' in st.session_state:
+            df = st.session_state['analyzed_menu']
+            st.markdown("#### 📊 BCG Menu Matrix")
+            
+            base_chart = alt.Chart(df).encode(
+                x=alt.X('Mix %:Q', title='ความนิยม (%)'),
+                y=alt.Y('Profit Margin (THB):Q', title='กำไรต่อจาน (฿)')
+            )
+            points = base_chart.mark_circle(size=200, opacity=0.8).encode(
+                color=alt.Color('Category:N', scale=alt.Scale(
+                    domain=['🌟 Star (ดาวเด่น)', '🐴 Plowhorse (ม้างาน)', '🧩 Puzzle (ปริศนา)', '🐶 Dog (หมาน้อย)'],
+                    range=['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
+                )), tooltip=['Menu Item', 'Category']
+            )
+            text_labels = base_chart.mark_text(align='left', dx=10, fontSize=11, fontWeight='bold').encode(text='Menu Item:N')
+            
+            st.altair_chart((points + text_labels).interactive(), use_container_width=True)
+
+    # ---------------- TAB 2: RFM ----------------
+    with tab2:
+        st.subheader("วิเคราะห์พฤติกรรมลูกค้า (Customer Centric)")
+        st.caption("R = วันล่าสุดที่มาซื้อ, F = ความถี่ที่มาซื้อ, M = ยอดใช้จ่ายรวม")
+        edited_rfm_df = st.data_editor(st.session_state.rfm_data, num_rows="dynamic", use_container_width=True)
+        
+        if st.button("🔍 แบ่งกลุ่มลูกค้า (Segment Customers)", key="btn_rfm"):
+            with st.spinner("กำลังประมวลผล..."):
+                result_rfm = calculate_rfm(edited_rfm_df.copy())
+                st.session_state['analyzed_rfm'] = result_rfm
+                
+        if 'analyzed_rfm' in st.session_state:
+            rfm_df = st.session_state['analyzed_rfm']
+            st.markdown("#### 👥 RFM Customer Segments")
+            
+            # กราฟลูกค้า R vs F ขนาดวงกลมตาม M
+            rfm_chart = alt.Chart(rfm_df).mark_circle(opacity=0.8).encode(
+                x=alt.X('Recency (Days):Q', title='วันล่าสุดที่ซื้อ (น้อย = ดี)', sort='descending'),
+                y=alt.Y('Frequency (Visits):Q', title='ความถี่ในการซื้อ (มาก = ดี)'),
+                size=alt.Size('Monetary (THB):Q', title='ยอดใช้จ่ายรวม'),
+                color=alt.Color('Segment:N', scale=alt.Scale(scheme='set2')),
+                tooltip=['Customer ID', 'Segment', 'Recency (Days)', 'Frequency (Visits)', 'Monetary (THB)']
+            ).properties(height=400)
+            
+            st.altair_chart(rfm_chart.interactive(), use_container_width=True)
+            
+            # สรุปจำนวนลูกค้า
+            st.markdown("##### 📌 สรุปจำนวนลูกค้าแต่ละกลุ่ม")
+            st.dataframe(rfm_df['Segment'].value_counts().reset_index().rename(columns={'index': 'Segment', 'Segment': 'จำนวนคน', 'count': 'จำนวนคน'}), hide_index=True)
+
+    # ---------------- TAB 3: AI HOLISTIC ----------------
+    with tab3:
+        st.subheader("🧠 กลยุทธ์ผสานข้อมูล (Menu x RFM)")
+        st.caption("กดปุ่มด้านล่างเพื่อให้ AI นำข้อมูล 'ความคุ้มค่าของเมนู' มาจับคู่กับ 'พฤติกรรมลูกค้า' เพื่อสร้างแผนการตลาดที่ตรงจุด")
+        
+        if 'analyzed_menu' not in st.session_state or 'analyzed_rfm' not in st.session_state:
+            st.warning("⚠️ กรุณากดคำนวณข้อมูลใน Tab 1 และ Tab 2 ให้ครบก่อนครับ")
+        else:
+            if st.button("✨ สร้างแผนกลยุทธ์แบบองค์รวม (Generate Holistic Strategy)", key="btn_ai"):
+                with st.spinner("AI กำลังวิเคราะห์และจับคู่ข้อมูล Product กับ Customer..."):
+                    strategy_text = generate_holistic_strategy(api_key_input, st.session_state['analyzed_menu'], st.session_state['analyzed_rfm'])
+                    st.markdown(f'<div class="strategy-card">{strategy_text}</div>', unsafe_allow_html=True)
+
+    st.markdown("<br><hr><center><small>Built with Streamlit, Pandas, Altair & Gemini AI | Multi-Dimensional Analytics Portfolio</small></center>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
